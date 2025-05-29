@@ -63,3 +63,18 @@ buildpred <- function(cuts, df) {
   return(pred)
 }
 
+
+loadpgm <- function() {
+  
+  # link to ff dropbox https://www.dropbox.com/scl/fo/rkj4ttawoz9pv6x35r9cq/ABODDO2BpL1U47oytDq9VzM/pgm_level_data?rlkey=44eg0kk4w8yh8tm1f53vvpzps&subfolder_nav_tracking=1&dl=0
+  
+  d <- read_parquet("data/pgm/pgm_data_121_542.parquet")
+  
+  countries <- read.csv("data/pgm/countries.csv")
+  pgmtocountry <- read.csv("data/pgm/priogrid_gid_to_country_id.csv")
+  month_ids <- read.csv("data/pgm/month_ids.csv")
+  
+  d <- merge(d, pgmtocountry[,c("priogrid_gid", "month_id", "country_id")], by= c("priogrid_gid", "month_id"), all.x=TRUE)
+  d <- merge(d, countries, by.x="country_id", by.y="id", all.x=TRUE)
+  d <- merge(d, month_ids[,2:4], by="month_id", all.x=TRUE)
+}

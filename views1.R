@@ -21,7 +21,7 @@ rm(list=ls())
 # for reading data
 library(arrow)
 library(data.table)
-
+library(curl)
 
 # load H2O and start up an H2O cluster
 library(h2o)
@@ -48,32 +48,18 @@ shift <- 1
 mm <- 10
 
 # how long to run h2o in seconds?
-h2oruntime <- 120
+h2oruntime <- 300 
 
-# read parquet data
-mydata <- read_parquet("/Users/vjdorazio/Desktop/github/forecasting/data/views2023/pgm_features_to_oct2017.parquet")
-
-# adding 2018
-adddata <- read_parquet("/Users/vjdorazio/Desktop/github/forecasting/data/views2023/pgm_features_to_oct2018.parquet")
-mydata <- rbind(mydata, adddata)
-
-# adding 2019
-adddata <- read_parquet("/Users/vjdorazio/Desktop/github/forecasting/data/views2023/pgm_features_to_oct2019.parquet")
-mydata <- rbind(mydata, adddata)
-
-# adding 2020
-adddata <- read_parquet("/Users/vjdorazio/Desktop/github/forecasting/data/views2023/pgm_features_to_oct2020.parquet")
-mydata <- rbind(mydata, adddata)
-
-rm(adddata)
+# read pgm parquet data
+mydata <- loadpgm()
 
 # keep only the SB variables
 if(myvars=="sb") {
-  keeps <- getvars(v="_sb", df=mydata)
-  mydata <- mydata[,keeps]
+  keeps <- getvars(v="_sb", df=mydata, a=c("name", "gwcode", "isoname", "isoab", "isonum", "in_africa", "in_middle_east", "country_id", "priogrid_gid", "month_id", "Month","Year"))
+  df <- mydata[,keeps]
 }
 
-df <- builddv(s=shift, df=mydata)
+df <- builddv(s=shift, df=df)
 
 # check the shift with grid 178273 because it has SB values
 #temp <- df[which(df$priogrid_gid==178273),c("priogrid_gid", "month_id", "pred_month_id", "ged_sb", "pred_ged_sb")]
@@ -82,11 +68,12 @@ df <- builddv(s=shift, df=mydata)
 
 # set factors
 df$priogrid_gid <- as.factor(df$priogrid_gid)
+df$gwcode <- as.factor(df$gwcode)
 
-# before omitting, partition to save the latest month_id (454)
+# before omitting, partition to save the latest month_id
 maxmonth <- max(df$month_id)
 forecastdata <- df[which(df$month_id==maxmonth),]
-forecastmonth <- maxmonth + shift + 2 # CHECK THIS
+forecastmonth <- maxmonth + shift + 2 # includes the +2 from views to account for data collection
 forecastdata$pred_month_id <- forecastmonth
 
 # omit NA because shift will create NAs
@@ -105,30 +92,32 @@ df$y <- BoxCox(df$pred_ged_sb+1, lambda=lambda)
 # if lambda is 1, this should be true
 all(df$y==df$pred_ged_sb)
 
-df <- as.h2o(df)
+traindf <- as.h2o(df[which(df$Year < 2023 & df$Year >= 2010),])
+validdf <- as.h2o(df[which(df$Year >= 2023),])
 mydv <- "y"
 
 if(myvars=="sb") {
-  predictors <- colnames(df)[c(3:36)]
+  predictors <- getvars(v="_sb", df=df, a=NULL)
+  predictors <- predictors[which(predictors != "pred_ged_sb")]
 }
 
 # should be TRUE
-h2o.isnumeric(df[mydv])
+h2o.isnumeric(traindf[mydv])
 
 ## autoML training
-aml <- h2o.automl(x=predictors, y=mydv, training_frame = df, max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
+aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf, max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
 
 u <- aml@leaderboard$model_id
 
 # note that aml@leader is the model, the filename is the model_id which i believe is unique
-h2o.saveModel(object=aml@leader, path="/Users/vjdorazio/Desktop/github/forecasting-fast/models")
+h2o.saveModel(object=aml@leader, path="models")
 
 leader <- aml@leader
 # if needing to go back and load a model
 # just the leader is saved, and this loads the leader
-#leader <- h2o.loadModel("/Users/vjdorazio/Desktop/github/forecasting/models/StackedEnsemble_AllModels_1_AutoML_12_20230915_220213")
+#leader <- h2o.loadModel("models/StackedEnsemble_AllModels_1_AutoML_12_20230915_220213")
 
-preds <- h2o.predict(leader, newdata=df) # predictions on the training data
+preds <- h2o.predict(leader, newdata=validdf) # predictions on the validation data
 
 # needs to be as.h2o
 forecastdata <- as.h2o(forecastdata)
@@ -155,13 +144,13 @@ if(lambda==-1) {
 preds <- BoxCoxInv(m, lambda=lambda) - 1
 forecasts <- BoxCoxInv(mf, lambda=lambda) - 1
 
-# write the predictions
+# write the validation predictions
 out <- as.data.frame(preds)
-df <- df[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id")]
-temp <- as.data.frame(df) 
+validdf <- validdf[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id")]
+temp <- as.data.frame(validdf) 
 out <- cbind(out, temp)
 
-fn <- paste("/Users/vjdorazio/Desktop/github/forecasting-fast/data/predictions/", leader@model_id, ".parquet", sep='')
+fn <- paste("data/predictions/", leader@model_id, ".parquet", sep='')
 write_parquet(out, fn)
 
 # write the forecasts
@@ -170,7 +159,7 @@ forecastdata <- forecastdata[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_
 temp <- as.data.frame(forecastdata) 
 out <- cbind(out, temp)
 
-fn <- paste("/Users/vjdorazio/Desktop/github/forecasting-fast/data/forecasts/", leader@model_id, "_", forecastmonth, ".parquet", sep='')
+fn <- paste("data/forecasts/", leader@model_id, "_", forecastmonth, ".parquet", sep='')
 write_parquet(out, fn)
 
 h2o.removeAll()
