@@ -1,5 +1,5 @@
 # forecasting-fast
-Repository for the FAST forecasting project.
+Repository for the FAST forecasting project..
 
 Important links:
 - IDEaS Fast Forward [data](https://www.dropbox.com/scl/fo/rkj4ttawoz9pv6x35r9cq/APSd_RJxvk-fpNAteD4J1iY?rlkey=44eg0kk4w8yh8tm1f53vvpzps&e=1&st=r0qv5cz1&dl=0)
