@@ -25,13 +25,49 @@ library(curl)
 
 # load H2O and start up an H2O cluster
 library(h2o)
-h2o.init(max_mem_size = "32g") #is this needed for xgboost?
+
+h2o.init(max_mem_size = "8G") #is this needed for xgboost?
 
 # for boxcox transformations
 library(DescTools)
 
 setwd("/Users/vjdorazio/Desktop/github/forecasting-fast")
+#setwd("/root/forecasting-fast/")
 
+
+
+# --------------- Date config =-----------------------------
+
+data_start_date    <- as.Date("2010-01-01")   # first month of features fed to the model
+data_end_date      <- as.Date("2023-06-01")   # last observed feature month (forecast origin)
+forecast_date      <- as.Date("2023-10-01")   # month we want to predict
+validation_months  <- 24                       # size of validation feature window (in months)
+
+# -------------Helper functions ------------------------------------
+# NOte: Month‑ID 1 corresponds to 1980‑01‑01.
+
+to_month_id   <- function(date) {
+  12 * (as.integer(format(date, "%Y")) - 1980L) + as.integer(format(date, "%m"))
+}
+
+from_month_id <- function(mid) {
+  as.Date(sprintf("%04d-%02d-01", 1980L + (mid - 1L) %/% 12L, 1L + (mid - 1L) %% 12L))
+}
+
+months_between <- function(d_future, d_past) {
+  to_month_id(d_future) - to_month_id(d_past)
+}
+
+# -----------------------  split parameters form the dates ---------------------------
+shift         <- months_between(forecast_date, data_end_date)         
+start_mid     <- to_month_id(data_start_date)
+end_mid       <- to_month_id(data_end_date)
+forecast_mid  <- to_month_id(forecast_date)
+val_end_mid   <- end_mid - shift                                     
+val_start_mid <- val_end_mid - (validation_months - 1L)               
+
+
+print(end_mid)
 # source utils script
 source("views_utils.R")
 
@@ -42,7 +78,7 @@ myvars <- "sb"
 lambda <- 0
 
 # how many months out? takes on value of 1-12
-shift <- 1
+#shift <- 1
 
 # how many models for autoML?
 mm <- 10
@@ -59,6 +95,8 @@ if(myvars=="sb") {
   df <- mydata[,keeps]
 }
 
+df <- df[df$month_id <=end_mid & df$month_id >= start_mid,] #df cutt-off section
+
 df <- builddv(s=shift, df=df)
 
 # check the shift with grid 178273 because it has SB values
@@ -73,8 +111,19 @@ df$gwcode <- as.factor(df$gwcode)
 # before omitting, partition to save the latest month_id
 maxmonth <- max(df$month_id)
 forecastdata <- df[which(df$month_id==maxmonth),]
-forecastmonth <- maxmonth + shift + 2 # includes the +2 from views to account for data collection
+forecastmonth <- maxmonth + shift #+ 2 # includes the +2 from views to account for data collection
 forecastdata$pred_month_id <- forecastmonth
+
+
+cat("Range of month_id in forecastdata:\n")
+print(range(forecastdata$month_id))
+cat("Range of pred_month_id in forecastdata:\n")
+print(range(forecastdata$pred_month_id))
+
+cat("\nFirst few rows of forecastdata:\n")
+print(head(forecastdata[, c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id")]))
+
+
 
 # omit NA because shift will create NAs
 df <- na.omit(df)
@@ -82,6 +131,7 @@ df <- na.omit(df)
 # check
 range(df$month_id)
 range(df$pred_month_id)
+
 
 # drop if the DV has negative values (it shouldn't)
 df <- df[which(df$pred_ged_sb>=0),]
@@ -92,8 +142,22 @@ df$y <- BoxCox(df$pred_ged_sb+1, lambda=lambda)
 # if lambda is 1, this should be true
 all(df$y==df$pred_ged_sb)
 
-traindf <- as.h2o(df[which(df$Year < 2023 & df$Year >= 2010),])
-validdf <- as.h2o(df[which(df$Year >= 2023),])
+
+# traindf <- as.h2o(df[which(df$Year < 2023 & df$Year >= 2010),])
+# validdf <- as.h2o(df[which(df$Year >= 2023),])
+
+traindf <- as.h2o(df[df$month_id < val_start_mid, ])
+
+validdf <- as.h2o(df[df$month_id >= val_start_mid & df$month_id <= val_end_mid, ])
+
+
+cat("Training Data:\n")
+cat("  Range of pred_month_id: ", range(traindf$pred_month_id), "\n")
+
+cat("Validation Data:\n")
+cat("  Range of pred_month_id: ", range(validdf$pred_month_id), "\n")
+
+
 mydv <- "y"
 
 if(myvars=="sb") {
