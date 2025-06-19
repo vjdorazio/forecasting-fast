@@ -26,21 +26,43 @@ library(curl)
 # load H2O and start up an H2O cluster
 library(h2o)
 
-h2o.init(max_mem_size = "8G") #is this needed for xgboost?
+port <- as.numeric(Sys.getenv("H2O_REST_PORT", unset = "54321"))
+ice_dir <- Sys.getenv("ICE_ROOT", unset = tempfile("h2o_tmp_"))
+dir.create(ice_dir, recursive = TRUE, showWarnings = FALSE)
 
+# Safer cluster name
+cluster_name <- paste0("grid_", Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1"))
+
+# Start H2O with safe ports and log location
+h2o.init(
+  ip = "127.0.0.1",
+  port = port,
+  name = cluster_name,
+  ice_root = ice_dir,
+  max_mem_size = "26G"  # Stay under --mem=32G
+)
 # for boxcox transformations
 library(DescTools)
 
-setwd("/Users/vjdorazio/Desktop/github/forecasting-fast")
-#setwd("/root/forecasting-fast/")
+#setwd("/Users/vjdorazio/Desktop/github/forecasting-fast")
+getwd()
+setwd("/users/ps00068/forecasting-fast")
 
+#--------- date from 
+
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) > 0) {
+  forecast_date <- as.Date(args[1])  
+} else {
+  forecast_date <- as.Date("2023-10-01")  # Default if no arg provided
+}
 
 
 # --------------- Date config =-----------------------------
 
 data_start_date    <- as.Date("2010-01-01")   # first month of features fed to the model
 data_end_date      <- as.Date("2023-06-01")   # last observed feature month (forecast origin)
-forecast_date      <- as.Date("2023-10-01")   # month we want to predict
+#forecast_date      <- as.Date("2023-10-01")   # month we want to predict
 validation_months  <- 24                       # size of validation feature window (in months)
 
 # -------------Helper functions ------------------------------------
@@ -84,7 +106,7 @@ lambda <- 0
 mm <- 10
 
 # how long to run h2o in seconds?
-h2oruntime <- 300 
+h2oruntime <- 9000
 
 # read pgm parquet data
 mydata <- loadpgm()
@@ -98,7 +120,8 @@ if(myvars=="sb") {
 df <- df[df$month_id <=end_mid & df$month_id >= start_mid,] #df cutt-off section
 
 df <- builddv(s=shift, df=df)
-
+range(df$month_id)
+range(df$pred_month_id)
 # check the shift with grid 178273 because it has SB values
 #temp <- df[which(df$priogrid_gid==178273),c("priogrid_gid", "month_id", "pred_month_id", "ged_sb", "pred_ged_sb")]
 #temp <- df[df$priogrid_gid=="178273",c("priogrid_gid", "month_id", "pred_month_id", "ged_sb", "pred_ged_sb")]
@@ -111,8 +134,11 @@ df$gwcode <- as.factor(df$gwcode)
 # before omitting, partition to save the latest month_id
 maxmonth <- max(df$month_id)
 forecastdata <- df[which(df$month_id==maxmonth),]
-forecastmonth <- maxmonth + shift #+ 2 # includes the +2 from views to account for data collection
+forecastmonth <- maxmonth + shift # + 2 # includes the +2 from views to account for data collection
 forecastdata$pred_month_id <- forecastmonth
+
+
+
 
 
 cat("Range of month_id in forecastdata:\n")
@@ -123,6 +149,11 @@ print(range(forecastdata$pred_month_id))
 cat("\nFirst few rows of forecastdata:\n")
 print(head(forecastdata[, c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id")]))
 
+mid_to_ym <- function(mid) format(from_month_id(mid), "%Y%m")
+fcst_ym   <- mid_to_ym(forecastmonth)          # e.g. "202501"
+h_label   <- paste0("h", shift)                # "h3" … "h12"
+task_id   <- Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1")
+run_label <- paste(h_label, fcst_ym, task_id, sep = "_")   # "h3_202501_07
 
 
 # omit NA because shift will create NAs
@@ -133,6 +164,7 @@ range(df$month_id)
 range(df$pred_month_id)
 
 
+
 # drop if the DV has negative values (it shouldn't)
 df <- df[which(df$pred_ged_sb>=0),]
 
@@ -141,7 +173,6 @@ df$y <- BoxCox(df$pred_ged_sb+1, lambda=lambda)
 
 # if lambda is 1, this should be true
 all(df$y==df$pred_ged_sb)
-
 
 # traindf <- as.h2o(df[which(df$Year < 2023 & df$Year >= 2010),])
 # validdf <- as.h2o(df[which(df$Year >= 2023),])
@@ -160,6 +191,8 @@ cat("  Range of pred_month_id: ", range(validdf$pred_month_id), "\n")
 
 mydv <- "y"
 
+
+
 if(myvars=="sb") {
   predictors <- getvars(v="_sb", df=df, a=NULL)
   predictors <- predictors[which(predictors != "pred_ged_sb")]
@@ -169,12 +202,16 @@ if(myvars=="sb") {
 h2o.isnumeric(traindf[mydv])
 
 ## autoML training
-aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf, max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
+aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf,   max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
 
 u <- aml@leaderboard$model_id
 
+#
+model_dir <- file.path("models", run_label)      
+dir.create(model_dir, recursive = TRUE, showWarnings = FALSE)  
+
 # note that aml@leader is the model, the filename is the model_id which i believe is unique
-h2o.saveModel(object=aml@leader, path="models")
+h2o.saveModel(object = aml@leader, path = model_dir, force = TRUE)
 
 leader <- aml@leader
 # if needing to go back and load a model
@@ -214,7 +251,7 @@ validdf <- validdf[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred
 temp <- as.data.frame(validdf) 
 out <- cbind(out, temp)
 
-fn <- paste("data/predictions/", leader@model_id, ".parquet", sep='')
+fn <- paste("data/predictions/", run_label, "_", leader@model_id, ".parquet", sep='')
 write_parquet(out, fn)
 
 # write the forecasts
@@ -223,14 +260,17 @@ forecastdata <- forecastdata[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_
 temp <- as.data.frame(forecastdata) 
 out <- cbind(out, temp)
 
-fn <- paste("data/forecasts/", leader@model_id, "_", forecastmonth, ".parquet", sep='')
+fn <- paste("data/forecasts/", leader@model_id, run_label, "_", forecastmonth, ".parquet", sep='')
 write_parquet(out, fn)
 
 h2o.removeAll()
 
 
 
-
+cat("\n✅ Job summary:",
+    "\n   run_label : ", run_label,
+    "\n   model_dir : ", model_dir,
+    "\n   forecast  : ", fn, "\n")
 
 
 
