@@ -1,7 +1,7 @@
 # ─── compare_one_month.R  (Africa zoom • MID titles • correct mask) ─
 suppressPackageStartupMessages({
   library(arrow);  library(data.table); library(sf)
-  library(ggplot2); library(patchwork); library(stringr); library(glue)
+  library(ggplot2); library(patchwork); library(stringr); library(glue); library(scales)
 })
 
 ## 1 ▸ forecast parquet path from CLI
@@ -55,25 +55,30 @@ rmse_pers <- rmse(eval_dt$gt,            eval_dt$persist_pred)
 ## 6 ▸ colour scale
 lim_hi <- max(eval_dt$gt, eval_dt$pred_value,
               eval_dt$persist_pred, na.rm = TRUE)
-fill_scale <- scale_fill_viridis_c(limits = c(0, lim_hi),
-                                   na.value = "white", name = "Count")
+fill_scale <- function(trans ="identity"){
+              scale_fill_viridis_c(trans = trans, limits = c(0, lim_hi),
+                                   na.value = "white", name = "Count", oob = scales::squish)}
 
 ## 7 ▸ helper for one panel  (Africa zoom + MID in title)
-mk_panel <- function(fill_col, ttl) {
+mk_panel <- function(fill_col, ttl, trans = "identity") {
   ggplot(eval_dt) +
     geom_sf(aes(fill = !!sym(fill_col)), colour = NA) +
     geom_sf(data = countries, fill = NA, colour = "black", linewidth = .25) +
-    fill_scale +
-    coord_sf(xlim = c(-20, 59), ylim = c(-40, 40)) +     # Africa clip
+    fill_scale(trans) +
+    coord_sf(xlim = c(-20, 59), ylim = c(-40, 40)) +    
     theme_void(base_size = 9) +
     labs(title = glue("{ttl}  (MID {mid})"))
 }
 
-p1 <- mk_panel("gt",          "Observed (gt)\nRMSE ref")
-p2 <- mk_panel("pred_value",  glue("Forecast\nRMSE {sprintf('%.3f', rmse_pred)}"))
-p3 <- mk_panel("zero_pred",   glue("All-Zero\nRMSE {sprintf('%.3f', rmse_zero)}"))
-p4 <- mk_panel("persist_pred",glue("Persistence\nRMSE {sprintf('%.3f', rmse_pers)}"))
+p1 <- mk_panel("gt",          "Observed (gt)",       trans = scales::pseudo_log_trans(0.5))
+p2 <- mk_panel("pred_value",  glue("Forecast\nRMSE {sprintf('%.3f', rmse_pred)}"),
+               trans = scales::pseudo_log_trans(0.5))
+p3 <- mk_panel("zero_pred",   glue("All-Zero\nRMSE {sprintf('%.3f', rmse_zero)}"),
+               trans = scales::pseudo_log_trans(0.5))
+p4 <- mk_panel("persist_pred",glue("Persistence\nRMSE {sprintf('%.3f', rmse_pers)}"),
+               trans = scales::pseudo_log_trans(0.5))
 
+               
 ## 8 ▸ assemble & save (still a single figure)
 out_png <- file.path("compare_plots", paste0("compare_", mid, ".png"))
 dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)

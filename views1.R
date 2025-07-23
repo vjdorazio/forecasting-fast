@@ -18,13 +18,30 @@
 
 rm(list=ls())
 
+
+id_message <- "tlags_splags"
+
 # for reading data
 library(arrow)
 library(data.table)
 library(curl)
+library(readr)
+library(Metrics)
+library(dplyr)
 
 # load H2O and start up an H2O cluster
 library(h2o)
+
+
+
+#------- w and b imports 
+
+# library(reticulate)
+# use_condaenv("r_clean", required = TRUE)  # use your actual env name
+# wandb <- import("wandb")
+
+# api_key <- Sys.getenv("WANDB_API_KEY")
+# wandb$login(key = api_key)
 
 port <- as.numeric(Sys.getenv("H2O_REST_PORT", unset = "54321"))
 ice_dir <- Sys.getenv("ICE_ROOT", unset = tempfile("h2o_tmp_"))
@@ -39,7 +56,7 @@ h2o.init(
   port = port,
   name = cluster_name,
   ice_root = ice_dir,
-  max_mem_size = "26G"  # Stay under --mem=32G
+  max_mem_size = "32G"  # Stay under --mem=32G
 )
 # for boxcox transformations
 library(DescTools)
@@ -85,8 +102,9 @@ shift         <- months_between(forecast_date, data_end_date)
 start_mid     <- to_month_id(data_start_date)
 end_mid       <- to_month_id(data_end_date)
 forecast_mid  <- to_month_id(forecast_date)
-val_end_mid   <- end_mid - shift                                     
-val_start_mid <- val_end_mid - (validation_months - 1L)               
+horizon_max  <- 12                       # largest forecast horizon 12 monht (shift = 12 → 12-month buffer )
+val_end_mid  <- end_mid - horizon_max    # → 2022-06 with current dates
+val_start_mid<- val_end_mid - (validation_months - 1L)  # 24-month window → 2020-07  
 
 
 print(end_mid)
@@ -97,16 +115,50 @@ source("views_utils.R")
 myvars <- "sb"
 
 # set to one of -1, -.5, 0, .5, 1
-lambda <- 0
+# lambda <- 1
+# #tweesdie_power
+# tweedie_power <- 1.75
+# # how many months out? takes on value of 1-12sa
+# #shift <- 1
 
-# how many months out? takes on value of 1-12
-#shift <- 1
-
-# how many models for autoML?
-mm <- 10
+# # how many models for autoML?
+# mm <- 20
 
 # how long to run h2o in seconds?
 h2oruntime <- 9000
+
+
+
+#lambda <- as.numeric(Sys.getenv("LAMBDA", unset = 1))
+
+raw_lambda <- Sys.getenv("LAMBDA")
+if (nchar(raw_lambda) == 0) {
+  stop("LAMBDA environment variable is empty!")
+}
+lambda <- as.numeric(raw_lambda)
+
+if (is.na(lambda)) {
+  stop(paste0("LAMBDA environment variable '", raw_lambda, "' could not be converted to numeric (it became NA)."))
+}
+# Now your original BoxCox code
+if (lambda < 0) x[x < 0] <- NA
+
+
+
+tweedie_power <- as.numeric(Sys.getenv("TWEEDIE_POWER", unset = 1.75))
+mm <- as.numeric(Sys.getenv("MM", unset = 20))
+
+
+# Define scratch output directory (for HPC)
+scratch_root <- file.path(path.expand("~"), "scratch", "forecasting-fast")
+# Create a hyperparameter tag for organizing results
+hp_tag <- paste0("lambda", lambda,
+                 "_twp", tweedie_power,
+                 "_mm", mm,
+                 "_rt", h2oruntime)
+
+
+source("views_utils.R")
 
 # read pgm parquet data
 mydata <- loadpgm()
@@ -120,8 +172,14 @@ if(myvars=="sb") {
 df <- df[df$month_id <=end_mid & df$month_id >= start_mid,] #df cutt-off section
 
 df <- builddv(s=shift, df=df)
+print("---total predictor month range---")
 range(df$month_id)
-range(df$pred_month_id)
+
+print("---prediction month range ---")
+range(df$pred_month_id,na.rm = TRUE )
+
+print("--- pred ged sb range ---")
+range(df$pred_ged_sb, na.rm = TRUE)
 # check the shift with grid 178273 because it has SB values
 #temp <- df[which(df$priogrid_gid==178273),c("priogrid_gid", "month_id", "pred_month_id", "ged_sb", "pred_ged_sb")]
 #temp <- df[df$priogrid_gid=="178273",c("priogrid_gid", "month_id", "pred_month_id", "ged_sb", "pred_ged_sb")]
@@ -153,15 +211,33 @@ mid_to_ym <- function(mid) format(from_month_id(mid), "%Y%m")
 fcst_ym   <- mid_to_ym(forecastmonth)          # e.g. "202501"
 h_label   <- paste0("h", shift)                # "h3" … "h12"
 task_id   <- Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1")
-run_label <- paste(h_label, fcst_ym, task_id, sep = "_")   # "h3_202501_07
+run_label <- paste(h_label, fcst_ym, task_id, id_message, hp_tag, sep = "_")
+
+
+# # w and b configs init
+# wandb$init(
+#   project = "grid_forecasting",
+#   name = run_label,
+#   config = dict(
+#     forecast_date = as.character(forecast_date),
+#     shift = shift,
+#     lambda = lambda,
+#     tweedie_power = tweedie_power,
+#     mm = mm,
+#     h2oruntime = h2oruntime,
+#     validation_mode = "default",  # can change later
+#     features = "sb_default"       # will change in Phase 2
+#   )
+# )
+
+
+
+
 
 
 # omit NA because shift will create NAs
 df <- na.omit(df)
 
-# check
-range(df$month_id)
-range(df$pred_month_id)
 
 
 
@@ -170,6 +246,12 @@ df <- df[which(df$pred_ged_sb>=0),]
 
 # Box-Cox transformation
 df$y <- BoxCox(df$pred_ged_sb+1, lambda=lambda)
+
+# # --- Add 3-month temporal rate features ---
+# df$rate_ged_sb_12_9 <- (df$ged_sb_tlag_9 - df$ged_sb_tlag_12) / 3
+# df$rate_ged_sb_9_6  <- (df$ged_sb_tlag_6 - df$ged_sb_tlag_9) / 3
+# df$rate_ged_sb_6_3  <- (df$ged_sb_tlag_3 - df$ged_sb_tlag_6) / 3
+# df$rate_ged_sb_3_0  <- (df$ged_sb       - df$ged_sb_tlag_3) / 3
 
 # if lambda is 1, this should be true
 all(df$y==df$pred_ged_sb)
@@ -183,36 +265,60 @@ validdf <- as.h2o(df[df$month_id >= val_start_mid & df$month_id <= val_end_mid, 
 
 
 cat("Training Data:\n")
+cat("  Range of month_id: ", range(traindf$month_id), "\n")
 cat("  Range of pred_month_id: ", range(traindf$pred_month_id), "\n")
 
 cat("Validation Data:\n")
+cat("  Range of month_id: ", range(validdf$month_id), "\n")
 cat("  Range of pred_month_id: ", range(validdf$pred_month_id), "\n")
 
 
 mydv <- "y"
 
 
-
 if(myvars=="sb") {
   predictors <- getvars(v="_sb", df=df, a=NULL)
+  #predictors <- colnames(df)[grepl("^ged_sb$|tlag", colnames(df))]
+  predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|splag", colnames(df))]
+  #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|mov_sum_", colnames(df))]
+  #rate_features <- c("rate_ged_sb_12_9", "rate_ged_sb_9_6", "rate_ged_sb_6_3", "rate_ged_sb_3_0")
+  #predictors <- c(predictors, rate_features)
   predictors <- predictors[which(predictors != "pred_ged_sb")]
 }
+
+
+#---------------------- debugging info --------------------------
+debug_dir <- file.path(scratch_root, "data", "debug", hp_tag)
+dir.create(debug_dir, recursive = TRUE, showWarnings = FALSE)
+write.csv(data.frame(predictor_names = predictors),
+          file = file.path(debug_dir,  paste0("predictor_", id_message, "_", hp_tag, ".csv")),
+  row.names = FALSE             
+)
+
 
 # should be TRUE
 h2o.isnumeric(traindf[mydv])
 
+
+
 ## autoML training
-aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf,   max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
+aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf,   distribution = list(type = "tweedie", tweedie_power = tweedie_power), exclude_algos = c("DeepLearning"),  max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
 
 u <- aml@leaderboard$model_id
 
 #
-model_dir <- file.path("models", run_label)      
-dir.create(model_dir, recursive = TRUE, showWarnings = FALSE)  
+# model_dir <- file.path("models", run_label)      
+# dir.create(model_dir, recursive = TRUE, showWarnings = FALSE)  
 
-# note that aml@leader is the model, the filename is the model_id which i believe is unique
+# # note that aml@leader is the model, the filename is the model_id which i believe is unique
+# h2o.saveModel(object = aml@leader, path = model_dir, force = TRUE)
+
+model_dir <- file.path(scratch_root, "models", run_label)
+dir.create(model_dir, recursive = TRUE, showWarnings = FALSE)
 h2o.saveModel(object = aml@leader, path = model_dir, force = TRUE)
 
+
+print(aml@leaderboard)
 leader <- aml@leader
 # if needing to go back and load a model
 # just the leader is saved, and this loads the leader
@@ -251,8 +357,16 @@ validdf <- validdf[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred
 temp <- as.data.frame(validdf) 
 out <- cbind(out, temp)
 
-fn <- paste("data/predictions/", run_label, "_", leader@model_id, ".parquet", sep='')
+# fn <- paste("data/predictions/", run_label, "_", leader@model_id, ".parquet", sep='')
+# write_parquet(out, fn)
+
+
+predictions_dir <- file.path(scratch_root, "data", "predictions", hp_tag)
+dir.create(predictions_dir, recursive = TRUE, showWarnings = FALSE)
+fn <- file.path(predictions_dir, paste0(run_label, "_", leader@model_id, ".parquet"))
 write_parquet(out, fn)
+
+
 
 # write the forecasts
 out <- as.data.frame(forecasts)
@@ -260,19 +374,88 @@ forecastdata <- forecastdata[,c("priogrid_gid", "month_id", "ged_sb", "pred_ged_
 temp <- as.data.frame(forecastdata) 
 out <- cbind(out, temp)
 
-fn <- paste("data/forecasts/", leader@model_id, run_label, "_", forecastmonth, ".parquet", sep='')
+# fn <- paste("data/forecasts/", leader@model_id, run_label, "_", forecastmonth, ".parquet", sep='')
+# write_parquet(out, fn)
+
+forecasts_dir <- file.path(scratch_root, "data", "forecasts", hp_tag)
+dir.create(forecasts_dir, recursive = TRUE, showWarnings = FALSE)
+fn <- file.path(forecasts_dir, paste0(leader@model_id, "_", run_label, "_", forecastmonth, ".parquet"))
 write_parquet(out, fn)
 
+
+
+# ------------------ Forecast Evaluation ------------------
+
+# Load ground truth from snapshot
+gt_file <- file.path("data", "gt_snapshots", paste0("gt_", forecastmonth, ".parquet"))
+gt_df <- read_parquet(gt_file)
+
+# Use in-memory forecast output
+forecast_df <- out  # this is already saved above
+
+# Ensure types match for join
+# forecast_df$priogrid_gid <- as.integer(forecast_df$priogrid_gid)
+# gt_df$priogrid_gid <- as.integer(gt_df$priogrid_gid)
+
+
+
+# Ensure types are compatible for join
+gt_df$priogrid_gid <- as.integer(gt_df$priogrid_gid)
+out$priogrid_gid <- as.integer(as.character(out$priogrid_gid))  # if it was factor
+out$month_id <- as.integer(out$month_id)
+out$pred_month_id <- as.integer(out$pred_month_id)
+
+# 🛠️ Join forecast and ground truth
+eval_df <- inner_join(gt_df, out, by = c("priogrid_gid" = "priogrid_gid",
+                                         "month_id" = "pred_month_id"))
+# Safety check
+if (nrow(eval_df) == 0) stop(" Join failed: no matching rows between forecast and ground truth.")
+
+#  Compute metrics
+mae_val <- mae(eval_df$gt, eval_df$predict)
+rmse_val <- rmse(eval_df$gt, eval_df$predict)
+range_vals <- range(eval_df$predict, na.rm = TRUE)
+
+# 🧹 Optional: clear H2O
 h2o.removeAll()
 
+#  Report
+cat("\n Forecast Evaluation (month_id =", forecastmonth, ")\n")
+cat("MAE         :", round(mae_val, 4), "\n")
+cat("RMSE        :", round(rmse_val, 4), "\n")
+cat("Forecast Range (min, max): (", round(range_vals[1], 2), ", ", round(range_vals[2], 2), ")\n", sep = "")
 
+results_file <- file.path(scratch_root, "results", "evaluation_results.csv")
+dir.create(dirname(results_file), recursive = TRUE, showWarnings = FALSE)
 
-cat("\n✅ Job summary:",
-    "\n   run_label : ", run_label,
-    "\n   model_dir : ", model_dir,
-    "\n   forecast  : ", fn, "\n")
+results_row <- data.frame(
+  month_id = forecastmonth,
+  lambda = lambda,
+  tweedie_power = tweedie_power,
+  mm = mm,
+  rmse = round(rmse_val, 4),
+  mae = round(mae_val, 4),
+  forecast_min = round(range_vals[1], 2),
+  forecast_max = round(range_vals[2], 2),
+  remark = id_message
+)
 
+write.table(results_row, file = results_file, append = TRUE, sep = ",",
+            col.names = !file.exists(results_file), row.names = FALSE)
+            
 
+# w and b logging 
+# wandb$log(dict(
+#   mae = round(mae_val, 4),
+#   rmse = round(rmse_val, 4),
+#   forecast_min = round(range_vals[1], 2),
+#   forecast_max = round(range_vals[2], 2)
+# ))
+# wandb$finish()
 
-
-
+# Job summary print
+cat("\n  job summary:",
+    "\n   run_label  : ", run_label,
+    "\n   model_dir  : ", model_dir,
+    "\n   forecast   : ", fn,
+    "\n   hyperparams: ", hp_tag, "\n")

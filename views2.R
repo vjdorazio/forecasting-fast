@@ -13,30 +13,36 @@ library(tweedie) # for the tweedie
 # for reading data
 library(arrow)
 
-setwd("/Users/vjdorazio/Desktop/github/forecasting-fast")
+#setwd("/Users/vjdorazio/Desktop/github/forecasting-fast")
 
 # source utils script
 source("views_utils.R")
 
-dir <- "/Users/vjdorazio/Desktop/github/forecasting-fast/data/forecasts/"
-ff <- list.files(dir)
-ff <- unique(grep(paste(".parquet",collapse="|"), ff, value=TRUE))
+# dir <- "/Users/vjdorazio/Desktop/github/forecasting-fast/data/forecasts/"
+# ff <- list.files(dir)
+# ff <- unique(grep(paste(".parquet",collapse="|"), ff, value=TRUE))
 
 # this is for the forecasts, if month_id is over 999 this won't work
 # that's something like 40 years from now
-d <- nchar("_000.parchet")
+# d <- nchar("_000.parchet")
 
 # just start with 1 without looping
-#for(a in 2:length(ff)) {
-#  Sys.sleep(60) # take a break
-#  print(a)
-fp <- substr(ff[1], 1, nchar(ff[1])-d)
-fp <- paste(fp, ".parquet", sep='')
-dir <- "/Users/vjdorazio/Desktop/github/forecasting-fast/data/predictions/"
-fn <- paste(dir, fp, sep='')
+# for(a in 2:length(ff)) {
+#   Sys.sleep(60) # take a break
+#   print(a)
+# fp <- substr(ff[1], 1, nchar(ff[1])-d)
+# fp <- paste(fp, ".parquet", sep='')
+# dir <- "/Users/vjdorazio/Desktop/github/forecasting-fast/data/predictions/"
+# fn <- paste(dir, fp, sep='')
 
 # read parquet data
-mydata <- read_parquet(fn)
+# mydata <- read_parquet(fn)
+
+#------------------------ read prediction file from command line ----------------
+args <- commandArgs(trailingOnly=TRUE)
+if (length(args) < 1) stop("no prediction file provided")
+input_file <- args[1]
+mydata <- read_parquet(input_file)
 
 # keeping the most recent 5 years of data
 mydata <- mydata[which(mydata$month_id > (max(mydata$month_id)-60)),]
@@ -148,7 +154,15 @@ if(mydist=="nb") {
   colnames(out) <- c("priogrid_gid", "crps_sum", "theta", "power")
 }
 
-fn <- paste("/Users/vjdorazio/Desktop/github/forecasting-fast/data/forecasts/params/", mydist, '_', fp, sep='')
-write_parquet(out, fn)
+# fn <- paste("/Users/vjdorazio/Desktop/github/forecasting-fast/data/forecasts/params/", mydist, '_', fp, sep='')
+# write_parquet(out, fn)
 
-#} # end the for loop that writes the grid specific parameters
+#------------------------ save results to central params folder ----------------
+basename <- tools::file_path_sans_ext(basename(input_file))
+hp_tag <- basename(dirname(input_file))
+
+params_dir <- file.path("/users/ps00068/scratch/forecasting-fast/data/params", hp_tag)
+dir.create(params_dir, recursive=TRUE, showWarnings=FALSE)
+
+output_file <- file.path(params_dir, paste0(basename, "_params.parquet"))
+write_parquet(out, output_file)
