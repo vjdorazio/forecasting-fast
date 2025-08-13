@@ -9,9 +9,11 @@
 #SBATCH --output=logs/views2_%x_%A_%a.out
 #SBATCH --error=logs/views2_%x_%A_%a.err
   # Or your R environment
+source /shared/software/conda/conda_init.sh
 source ~/.bashrc
-conda activate r_clean
 
+
+conda activate /scratch/ps00068/r_clean
 # Base directory (same hp_tag as views1 runs)
 HP_TAG="lambda1_twp1.75_mm20_rt9000"
 BASE_DIR="/users/ps00068/scratch/forecasting-fast/data/predictions/$HP_TAG"

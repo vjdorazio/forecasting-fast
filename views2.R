@@ -92,30 +92,30 @@ if(mydist=='t') {# finalscores will be same row size as pred
 for(gi in 1:length(u)) {
   gdata <- mydata[which(mydata$priogrid_gid==u[gi]),]
   gpred <- buildpred(cuts=cuts, df=gdata)
-#  if(mydist=="t") {
-    scores <- matrix(data=0, nrow=nrow(gpred), ncol=(nrow(tweediemat)*ncol(gpred)))
- #   }
- # if(mydist=="nb") {
-#    scores <- matrix(data=0, nrow=nrow(gpred), ncol=(length(thetamat)*ncol(gpred)))
-#  }
-    for(i in 1:nrow(gpred)) {
+  #  if(mydist=="t") {
+  scores <- matrix(data=0, nrow=nrow(gpred), ncol=(nrow(tweediemat)*ncol(gpred)))
+  #   }
+  # if(mydist=="nb") {
+  #    scores <- matrix(data=0, nrow=nrow(gpred), ncol=(length(thetamat)*ncol(gpred)))
+  #  }
+  for(i in 1:nrow(gpred)) {
     scoreI <- 1
-  
-    for(ii in 1:ncol(gpred)) {
     
+    for(ii in 1:ncol(gpred)) {
+      
       # only do these one at a time
-    # negative binomial
-#      if(mydist=='nb') {
-#    for(j in 1:length(thetamat)) {
-   #   mytheta <- pred[i,ii]/thetamat[j]
-  #    if(mytheta==0) {mytheta<-1}
-  #    draws <- rnegbin(n, mu=pred[i,ii], theta=mytheta)
- #     draws <- rnegbin(n, mu=gpred[i,ii], theta=thetamat[j])
-#      scores[i,scoreI] <- crps_sample(y=gdata$pred_ged_sb[i], dat=draws)
-#      scoreI <- scoreI+1
-#    }
+      # negative binomial
+      #      if(mydist=='nb') {
+      #    for(j in 1:length(thetamat)) {
+      #   mytheta <- pred[i,ii]/thetamat[j]
+      #    if(mytheta==0) {mytheta<-1}
+      #    draws <- rnegbin(n, mu=pred[i,ii], theta=mytheta)
+      #     draws <- rnegbin(n, mu=gpred[i,ii], theta=thetamat[j])
+      #      scores[i,scoreI] <- crps_sample(y=gdata$pred_ged_sb[i], dat=draws)
+      #      scoreI <- scoreI+1
+      #    }
       #}
-  #    if(mydist=='t') {
+      #    if(mydist=='t') {
       # tweedie
       for(j in 1:nrow(tweediemat)) {
         draws <- round(rtweedie(n=n, power=tweediemat[j,2], mu=gpred[i,ii]+smidge, phi=tweediemat[j,1]), digits=0)
@@ -124,17 +124,17 @@ for(gi in 1:length(u)) {
       }
       #}
     }
-    }
+  }
   sums <- apply(scores, MARGIN=2, FUN=sum)
-#  if(mydist=='t') {
-#  aa<-Sys.time()
-    subscores <- cbind(u[gi], scores[,which.min(sums)], tweediemat[which.min(sums),])
-#bb<-Sys.time()-aa
-    #  }
-#  if(mydist=='nb') {
-#    subscores <- cbind(u[gi], scores[,which.min(sums)], thetamat[which.min(sums)])
-#  }
-#  finalscores <- rbind(finalscores, subscores)
+  #  if(mydist=='t') {
+  #  aa<-Sys.time()
+  subscores <- cbind(u[gi], scores[,which.min(sums)], tweediemat[which.min(sums),])
+  #bb<-Sys.time()-aa
+  #  }
+  #  if(mydist=='nb') {
+  #    subscores <- cbind(u[gi], scores[,which.min(sums)], thetamat[which.min(sums)])
+  #  }
+  #  finalscores <- rbind(finalscores, subscores)
   nss <- nrow(subscores)
   finalscores[fsi:(nss+fsi-1),] <- subscores
   fsi<-fsi+nss

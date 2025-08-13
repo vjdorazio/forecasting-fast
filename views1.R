@@ -19,7 +19,7 @@
 rm(list=ls())
 
 
-id_message <- "tlags_splags"
+id_message <- "nfolds=0"
 
 # for reading data
 library(arrow)
@@ -103,7 +103,7 @@ start_mid     <- to_month_id(data_start_date)
 end_mid       <- to_month_id(data_end_date)
 forecast_mid  <- to_month_id(forecast_date)
 horizon_max  <- 12                       # largest forecast horizon 12 monht (shift = 12 → 12-month buffer )
-val_end_mid  <- end_mid - horizon_max    # → 2022-06 with current dates
+val_end_mid  <- end_mid - horizon_max    #  2022-06 with current dates
 val_start_mid<- val_end_mid - (validation_months - 1L)  # 24-month window → 2020-07  
 
 
@@ -140,7 +140,7 @@ lambda <- as.numeric(raw_lambda)
 if (is.na(lambda)) {
   stop(paste0("LAMBDA environment variable '", raw_lambda, "' could not be converted to numeric (it became NA)."))
 }
-# Now your original BoxCox code
+# Now  original BoxCox code
 if (lambda < 0) x[x < 0] <- NA
 
 
@@ -279,7 +279,7 @@ mydv <- "y"
 if(myvars=="sb") {
   predictors <- getvars(v="_sb", df=df, a=NULL)
   #predictors <- colnames(df)[grepl("^ged_sb$|tlag", colnames(df))]
-  predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|splag", colnames(df))]
+  #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|splag", colnames(df))]
   #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|mov_sum_", colnames(df))]
   #rate_features <- c("rate_ged_sb_12_9", "rate_ged_sb_9_6", "rate_ged_sb_6_3", "rate_ged_sb_3_0")
   #predictors <- c(predictors, rate_features)
@@ -302,7 +302,7 @@ h2o.isnumeric(traindf[mydv])
 
 
 ## autoML training
-aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf,   distribution = list(type = "tweedie", tweedie_power = tweedie_power), exclude_algos = c("DeepLearning"),  max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
+aml <- h2o.automl(x=predictors, y=mydv, training_frame = traindf, validation_frame = validdf, distribution = list(type = "tweedie", tweedie_power = tweedie_power), exclude_algos = c("DeepLearning"),  max_models = mm, seed=4422, max_runtime_secs = h2oruntime)
 
 u <- aml@leaderboard$model_id
 
@@ -323,6 +323,49 @@ leader <- aml@leader
 # if needing to go back and load a model
 # just the leader is saved, and this loads the leader
 #leader <- h2o.loadModel("models/StackedEnsemble_AllModels_1_AutoML_12_20230915_220213")
+
+
+# Save the full leaderboard for this run, grouped by hp_tag folder
+leaderboard_dir <- file.path(scratch_root, "results", "leaderboards", hp_tag)
+dir.create(leaderboard_dir, recursive = TRUE, showWarnings = FALSE)
+
+lb <- as.data.frame(aml@leaderboard)
+lb$run_label <- run_label
+
+arrow::write_parquet(
+  lb,
+  file.path(leaderboard_dir, paste0(run_label, "_leaderboard.parquet"))
+)
+
+
+perf_val <- h2o.performance(leader, valid = TRUE)
+
+val_row <- data.frame(
+  run_label = run_label,              # full identity string you already use
+  h_label   = h_label,                
+  model_id  = leader@model_id,
+  rmse      = h2o.rmse(perf_val),
+  mae       = tryCatch(h2o.mae(perf_val), error = function(e) NA_real_),
+  n         = h2o.nobs(perf_val)
+)
+
+
+val_dir  <- file.path(scratch_root, "results", "validation_metrics", hp_tag)
+dir.create(val_dir, recursive = TRUE, showWarnings = FALSE)
+
+# one CSV per id_message under that folder
+val_file <- file.path(val_dir, paste0("validation_", id_message, ".csv"))
+
+write.table(
+  val_row,
+  file = val_file,
+  sep = ",",
+  row.names = FALSE,
+  col.names = !file.exists(val_file),   # write header if creating new
+  append = TRUE
+)
+
+cat("\nAppended validation row to: ", val_file, "\n")
 
 preds <- h2o.predict(leader, newdata=validdf) # predictions on the validation data
 
@@ -416,7 +459,7 @@ mae_val <- mae(eval_df$gt, eval_df$predict)
 rmse_val <- rmse(eval_df$gt, eval_df$predict)
 range_vals <- range(eval_df$predict, na.rm = TRUE)
 
-# 🧹 Optional: clear H2O
+#Optional: clear H2O
 h2o.removeAll()
 
 #  Report
