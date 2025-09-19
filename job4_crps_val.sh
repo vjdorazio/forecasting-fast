@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=FFP_CRPS
+#SBATCH --job-name=FFP_CRPS_val
 #SBATCH --array=1-12                 # Adjust based on the mode (12 for baseline, more for tlags)
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -35,5 +35,5 @@ fi
 DRAW_FILE="${FILES[$SLURM_ARRAY_TASK_ID-1]}"
 
 echo "Processing CRPS for: $DRAW_FILE"
-Rscript views4.R "$DRAW_FILE"
+Rscript views4_crps_val.R "$DRAW_FILE"
 echo "Done with: $DRAW_FILE"

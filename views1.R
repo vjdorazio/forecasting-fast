@@ -19,7 +19,7 @@
 rm(list=ls())
 
 
-id_message <- "nfolds=0"
+id_message <- "tlags"
 
 # for reading data
 library(arrow)
@@ -56,7 +56,7 @@ h2o.init(
   port = port,
   name = cluster_name,
   ice_root = ice_dir,
-  max_mem_size = "32G"  # Stay under --mem=32G
+  max_mem_size = "48G"  # Stay under --mem=32G
 )
 # for boxcox transformations
 library(DescTools)
@@ -163,15 +163,48 @@ source("views_utils.R")
 # read pgm parquet data
 mydata <- loadpgm()
 
-# keep only the SB variables
-if(myvars=="sb") {
-  keeps <- getvars(v="_sb", df=mydata, a=c("name", "gwcode", "isoname", "isoab", "isonum", "in_africa", "in_middle_east", "country_id", "priogrid_gid", "month_id", "Month","Year"))
-  df <- mydata[,keeps]
+if (myvars == "sb") {
+  
+  # 17 climate and food variables
+  keep_extra <- c(
+    "count_moder_drought_prev10", "cropprop", "growseasdummy","pred_growseasdummy",
+    "spei1_gs_prev10", "spei1_gs_prev10_anom", "spei1_gsm_cv_anom",
+    "spei1_gsm_detrend", "spei1gsy_lowermedian_count", "spei_48_detrend",
+    "tlag1_dr_mod_gs", "tlag1_dr_moder_gs", "tlag1_dr_sev_gs",
+    "tlag1_spei1_gsm", "tlag_12_crop_sum", "tlag_12_harvarea_maincrops",
+    "tlag_12_irr_maincrops", "tlag_12_rainf_maincrops"
+  )
+  
+  # id and calendar metadata
+  keep_meta <- c(
+    "name", "gwcode", "isoname", "isoab", "isonum",
+    "in_africa", "in_middle_east", "country_id",
+    "priogrid_gid", "month_id", "Month", "Year"
+  )
+  
+  # build keep list = all `_sb` cols + metadata + 17 extras
+  keeps <- getvars(v = "_sb", df = mydata, a = c(keep_meta, keep_extra))
+  
+  # safety: only keep columns that actually exist
+  keeps <- intersect(keeps, names(mydata))
+  
+  # report missing requested columns
+  requested <- c(keep_extra, keep_meta)
+  missing_cols <- setdiff(requested, names(mydata))
+  if (length(missing_cols) > 0) {
+    message("warning: requested columns missing in mydata: ",
+            paste(missing_cols, collapse = ", "))
+  }
+  
+  # subset columns
+  df <- mydata[, keeps]
 }
+
 
 df <- df[df$month_id <=end_mid & df$month_id >= start_mid,] #df cutt-off section
 
-df <- builddv(s=shift, df=df)
+#df <- builddv(s=shift, df=df)
+df <- builddv_growseasdummy(s=shift, df=df)
 print("---total predictor month range---")
 range(df$month_id)
 
@@ -247,17 +280,10 @@ df <- df[which(df$pred_ged_sb>=0),]
 # Box-Cox transformation
 df$y <- BoxCox(df$pred_ged_sb+1, lambda=lambda)
 
-# # --- Add 3-month temporal rate features ---
-# df$rate_ged_sb_12_9 <- (df$ged_sb_tlag_9 - df$ged_sb_tlag_12) / 3
-# df$rate_ged_sb_9_6  <- (df$ged_sb_tlag_6 - df$ged_sb_tlag_9) / 3
-# df$rate_ged_sb_6_3  <- (df$ged_sb_tlag_3 - df$ged_sb_tlag_6) / 3
-# df$rate_ged_sb_3_0  <- (df$ged_sb       - df$ged_sb_tlag_3) / 3
 
 # if lambda is 1, this should be true
 all(df$y==df$pred_ged_sb)
 
-# traindf <- as.h2o(df[which(df$Year < 2023 & df$Year >= 2010),])
-# validdf <- as.h2o(df[which(df$Year >= 2023),])
 
 traindf <- as.h2o(df[df$month_id < val_start_mid, ])
 
@@ -278,12 +304,12 @@ mydv <- "y"
 
 if(myvars=="sb") {
   predictors <- getvars(v="_sb", df=df, a=NULL)
-  #predictors <- colnames(df)[grepl("^ged_sb$|tlag", colnames(df))]
-  #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|splag", colnames(df))]
+  predictors <- colnames(df)[(grepl("^ged_sb$|ged_sb_tlag", colnames(df)))]  #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|splag", colnames(df))]
   #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|mov_sum_", colnames(df))]
   #rate_features <- c("rate_ged_sb_12_9", "rate_ged_sb_9_6", "rate_ged_sb_6_3", "rate_ged_sb_3_0")
   #predictors <- c(predictors, rate_features)
-  predictors <- predictors[which(predictors != "pred_ged_sb")]
+  #predictors <- union(predictors, intersect(keep_extra[c(4,11,14,18)], names(df)))
+  predictors <- predictors[which(predictors != "pred_ged_sb")] # mode readable line for same task  predictors <- setdiff(predictors, "pred_ged_sb")
 }
 
 
@@ -296,9 +322,24 @@ write.csv(data.frame(predictor_names = predictors),
 )
 
 
+
+
 # should be TRUE
 h2o.isnumeric(traindf[mydv])
 
+cat("Predictors check: sb=", sum(grepl("_sb", predictors)),
+    " extra=", sum(predictors %in% keep_extra),
+    " total=", length(predictors), "\n", sep = "")
+
+if (!all(predictors %in% colnames(traindf))) {
+  stop(paste("Missing in traindf:", 
+             paste(setdiff(predictors, colnames(traindf)), collapse = ", ")))
+}
+
+cat("Full predictor list:\n")
+for (i in seq_along(predictors)) {
+  cat(i, ":", predictors[i], "\n")
+}
 
 
 ## autoML training
@@ -338,7 +379,7 @@ arrow::write_parquet(
 )
 
 
-perf_val <- h2o.performance(leader, valid = TRUE)
+perf_val <- h2o.performance(leader, newdata = validdf)
 
 val_row <- data.frame(
   run_label = run_label,              # full identity string you already use
@@ -346,7 +387,8 @@ val_row <- data.frame(
   model_id  = leader@model_id,
   rmse      = h2o.rmse(perf_val),
   mae       = tryCatch(h2o.mae(perf_val), error = function(e) NA_real_),
-  n         = h2o.nobs(perf_val)
+  #n         = h2o.nobs(perf_val)
+  n         = h2o.nrow(validdf)
 )
 
 

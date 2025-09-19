@@ -5,7 +5,7 @@
 #SBATCH -N 1
 #SBATCH -c 6
 #SBATCH -n 1
-#SBATCH --array=1-1
+#SBATCH --array=1-3
 #SBATCH -p standby
 #SBATCH -t 04:00:00
 #SBATCH --output=logs/%x_%A_%a.out
@@ -13,7 +13,7 @@
 ##SBATCH --array=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=6
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 
 
 

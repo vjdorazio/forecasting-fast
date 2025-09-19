@@ -3,9 +3,9 @@
 #SBATCH --array=1-12
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=16G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=48G
+#SBATCH --time=4:00:00
 #SBATCH --output=logs/views2_%x_%A_%a.out
 #SBATCH --error=logs/views2_%x_%A_%a.err
   # Or your R environment
@@ -21,13 +21,14 @@ BASE_DIR="/users/ps00068/scratch/forecasting-fast/data/predictions/$HP_TAG"
 # Choose mode: "baseline" or "tlags" (pass this when submitting)
 MODE=$1
 
-# Dynamically build the file list based on the mode
-if [ "$MODE" == "baseline" ]; then
-    FILES=($(ls "$BASE_DIR"/*.parquet | grep -v "tlags" | grep -v "splags" | grep -v "mov_sum"))
-elif [ "$MODE" == "tlags" ]; then
-    FILES=($(ls "$BASE_DIR"/*_tlags_*.parquet | grep -v "splags" | grep -v "mov_sum"))
+# --------- SELECT FILES BASED ON MODE ---------
+if [ "$MODE" == "tlags" ]; then
+    FILES=($(ls "$BASE_DIR"/*_tlags_lambda1_*.parquet | sort))
+elif [ "$MODE" == "specific" ]; then
+    ID_KEY="tlags_tlag1_dr_mod_gs__pred_growseasdummy"
+    FILES=($(ls "$BASE_DIR"/*"$ID_KEY"*.parquet | sort))
 else
-    echo "Invalid mode. Use 'baseline' or 'tlags'."
+    echo "❌ Invalid mode: $MODE"
     exit 1
 fi
 

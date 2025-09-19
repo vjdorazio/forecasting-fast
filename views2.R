@@ -154,6 +154,9 @@ if(mydist=="nb") {
   colnames(out) <- c("priogrid_gid", "crps_sum", "theta", "power")
 }
 
+#keep the first  row for each unique priogrid_gid
+out <- out[!duplicated(out$priogrid_gid), ]
+
 # fn <- paste("/Users/vjdorazio/Desktop/github/forecasting-fast/data/forecasts/params/", mydist, '_', fp, sep='')
 # write_parquet(out, fn)
 
