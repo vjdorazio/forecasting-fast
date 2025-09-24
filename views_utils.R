@@ -10,10 +10,42 @@ builddv <- function(s, df) {
   df <- df[,c("ged_sb", "month_id", "priogrid_gid")]
   colnames(df)[1] <- "pred_ged_sb"
   df$pred_month_id <- df$month_id
-  df$month_id <- df$month_id - 2 - s
+  df$month_id <- df$month_id - s #-2 
   out <- merge(out, df, by=c("priogrid_gid", "month_id"), all.x=TRUE)
   return(out)
 }
+
+builddv_growseasdummy <- function(s, df) {
+  # 1) Create DV at forecast month and attach it back at predictor month
+  out <- df
+  dv_df <- df[, c("ged_sb", "month_id", "priogrid_gid")]
+  colnames(dv_df)[1] <- "pred_ged_sb"
+  dv_df$pred_month_id <- dv_df$month_id
+  dv_df$month_id <- dv_df$month_id - s
+  out <- merge(out, dv_df, by = c("priogrid_gid", "month_id"), all.x = TRUE)
+  
+  # 2) Align growseasdummy to the forecast month, if the column exists
+  if ("growseasdummy" %in% names(out)) {
+    grow_lookup <- out[, c("priogrid_gid", "month_id", "growseasdummy")]
+    colnames(grow_lookup)[3] <- "pred_growseasdummy"
+    
+    # Join on (priogrid_gid, pred_month_id) -> (priogrid_gid, month_id) to fetch the forecast month's value
+    out <- merge(
+      out,
+      grow_lookup,
+      by.x = c("priogrid_gid", "pred_month_id"),
+      by.y = c("priogrid_gid", "month_id"),
+      all.x = TRUE,
+      sort = FALSE
+    )
+  }
+  
+  return(out)
+}
+
+
+
+
 
 # v is a vector, will grep and return names of all matches
 # v should include any of: _sb, _ns, _os, acled_fatalities, acled_fatalities, acled_battles, acled_remote, acled_civvio, acled_protests, acled_riots, acled_stratdev
@@ -64,17 +96,17 @@ buildpred <- function(cuts, df) {
 }
 
 
-loadpgm <- function() {
-  
-  # link to ff dropbox https://www.dropbox.com/scl/fo/rkj4ttawoz9pv6x35r9cq/ABODDO2BpL1U47oytDq9VzM/pgm_level_data?rlkey=44eg0kk4w8yh8tm1f53vvpzps&subfolder_nav_tracking=1&dl=0
-  
-  d <- read_parquet("data/pgm/pgm_data_121_542.parquet")
-  
-  countries <- read.csv("data/pgm/countries.csv")
-  pgmtocountry <- read.csv("data/pgm/priogrid_gid_to_country_id.csv")
-  month_ids <- read.csv("data/pgm/month_ids.csv")
-  
-  d <- merge(d, pgmtocountry[,c("priogrid_gid", "month_id", "country_id")], by= c("priogrid_gid", "month_id"), all.x=TRUE)
-  d <- merge(d, countries, by.x="country_id", by.y="id", all.x=TRUE)
-  d <- merge(d, month_ids[,2:4], by="month_id", all.x=TRUE)
-}
+    loadpgm <- function() {
+      
+      # link to ff dropbox https://www.dropbox.com/scl/fo/rkj4ttawoz9pv6x35r9cq/ABODDO2BpL1U47oytDq9VzM/pgm_level_data?rlkey=44eg0kk4w8yh8tm1f53vvpzps&subfolder_nav_tracking=1&dl=0
+      
+      d <- read_parquet("data/pgm/pgm_data_121_542.parquet")
+      
+      countries <- read.csv("data/pgm/countries.csv")
+      pgmtocountry <- read.csv("data/pgm/priogrid_gid_to_country_id.csv")
+      month_ids <- read.csv("data/pgm/month_ids.csv")
+      
+      d <- merge(d, pgmtocountry[,c("priogrid_gid", "month_id", "country_id")], by= c("priogrid_gid", "month_id"), all.x=TRUE)
+      d <- merge(d, countries, by.x="country_id", by.y="id", all.x=TRUE)
+      d <- merge(d, month_ids[,2:4], by="month_id", all.x=TRUE)
+    }
