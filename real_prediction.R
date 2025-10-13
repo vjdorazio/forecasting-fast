@@ -1,7 +1,23 @@
 rm(list=ls())
 library(arrow)
 library(h2o)
+library(MASS) # using this for rnegbin
 
+# for reading data
+library(arrow)
+library(dplyr)
+library(h2o)
+
+
+
+
+
+mydata <- read_parquet("~/forecasting-fast/data/2025_pgm/updated_pgm_2025_01-07.parquet")
+
+# Keep the forecast input month
+mydata <- mydata[(mydata$month_id == 546),]
+
+cat("month id:", length(mydata$month_id))
 
 port <- as.numeric(Sys.getenv("H2O_REST_PORT", unset = "54321"))
 ice_dir <- Sys.getenv("ICE_ROOT", unset = tempfile("h2o_tmp_"))
@@ -9,14 +25,14 @@ dir.create(ice_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Safer cluster name
 cluster_name <- paste0("grid_", Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1"))
-# h2o.init(max_mem_size = "32G" )
+ # h2o.init(max_mem_size = "32G" )
 #Start H2O with safe ports and log location
 h2o.init(
   ip = "127.0.0.1",
   port = port,
   name = cluster_name,
   ice_root = ice_dir,
-  max_mem_size = "30G"  # Stay under --mem=32G
+  max_mem_size = "24G"  # Stay under --mem=32G
 )
 # need to re_run the preduction by loading the models and generate the
 
@@ -25,20 +41,23 @@ args <- commandArgs(trailingOnly = TRUE)
 model_folder <- args[1]
 
 
-#model_folder <- path.expand("~/scratch/forecasting-fast/models/h9_202403_6_tlags_tlag1_dr_mod_gs__pred_growseasdummy_lambda1_twp1.75_mm20_rt9000")
-save_dir <-path.expand("~/scratch/forecasting-fast/data")
+
+
+
+#model_folder <- path.expand("~/scratch/forecasting-fast/models/h10_202404_7_tlags_basline_dr_mod_2022growseasdummy_lambda1_twp1.75_mm20_rt9000")
+save_dir <-path.expand("~/scratch/forecasting-fast/data/2025_forecast")
 folder_name <- basename(model_folder)
 shift <- as.integer(sub("h([0-9]+)_.*", "\\1", folder_name))
 cat("the shift value is :", shift, "\n")
 
-start_mid <- as.integer(361)
-end_mid <- as.integer(510)
-val_end_mid <- end_mid
-val_start_mid <- as.integer(487)
 
 myvars <- "sb"
+
+
+
+setwd("~/forecasting-fast/")
 source("views_utils.R")
-mydata <- loadpgm()
+
 
 # ---- Prepare Data ----
 if (myvars == "sb") {
@@ -68,16 +87,32 @@ if (myvars == "sb") {
 
 
 
-#df <- builddv(s = shift, df = df)
-df <- builddv_growseasdummy(s=shift, df=df)
-df <- df[df$month_id <= end_mid & df$month_id >= start_mid, ]
-
-
+#df <- builddv1(s = shift, df = df)
+#df <-builddv_growseasdummy(s = shift, df = df)
 
 df$priogrid_gid <- as.factor(df$priogrid_gid)
-df$gwcode <- as.factor(df$gwcode)
-df <- na.omit(df)
-df <- df[which(df$pred_ged_sb >= 0),]
+#df$gwcode <- as.factor(df$gwcode)
+
+df$pred_month_id <- df$month_id + shift
+
+# df1 <- loadpgm()
+# df1 <-builddv_growseasdummy(s = shift, df = df1)
+
+df$pred_month_index <- ((df$pred_month_id - 1) %% 12) + 1
+template_2024 <- read.csv(file.path("csv", "2024_growseasdummy_template.csv"))
+template_2024 <- template_2024[, c("priogrid_gid", "month_index", "growseasdummy")]
+colnames(template_2024)[3] <- "growseasdummy_2024"
+
+# Merge so each forecast row gets the right cyclic value
+df <- merge(
+  df,
+  template_2024,
+  by.x = c("priogrid_gid", "pred_month_index"),
+  by.y = c("priogrid_gid", "month_index"),
+  all.x = TRUE
+)
+
+
 
 # ---- Predictor Columns ----
 if (myvars == "sb") {
@@ -101,6 +136,7 @@ print(head(df, 10))
 # ---- Prepare H2O Frame ----
 loaddf <- as.h2o(df)
 
+
 # ---- Load Model ----
 model_candidates <- list.files(model_folder, full.names = TRUE)
 
@@ -122,31 +158,31 @@ cat("Model loaded with model name:", model@model_id, "\n")
 # ---- Predict on All Data ----
 pred_h2o <- h2o.predict(model, loaddf[, predictors])
 pred_col <- as.vector(as.data.frame(pred_h2o)[, 1])
-full_pred_df <- as.data.frame(df)
-full_pred_df$predict <- pred_col
+pred_df <- as.data.frame(df)
+pred_df$predict <- pred_col
+################# need to do rounding operation#################
+
+pred_df$predict_round <- round(pred_df$predict)
+
+
 
 dir.create(save_dir, recursive = TRUE, showWarnings = FALSE)
 
-full_pred_dir <- file.path(save_dir, "full_pred")
-reval_dir <- file.path(save_dir, "re_validation")
+forecast_dir <- file.path(save_dir, "forecast")
 
-dir.create(full_pred_dir, recursive = TRUE, showWarnings = FALSE)
-dir.create(reval_dir, recursive = TRUE, showWarnings = FALSE)
+
+dir.create(forecast_dir, recursive = TRUE, showWarnings = FALSE)
 
 
 
 # ---- Save Full-Range Predictions (Only Specified Columns) ----
-cols_to_save <- c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id", "predict")
-cols_to_save <- cols_to_save[cols_to_save %in% names(full_pred_df)]  # keep only existing columns
+cols_to_save <- c("predict","priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id")
+cols_to_save <- cols_to_save[cols_to_save %in% names(pred_df)]  # keep only existing columns
 
-dir.create(full_pred_dir, recursive = TRUE, showWarnings = FALSE)
-full_pred_file <- file.path(full_pred_dir, paste0(folder_name, "_full_pred.parquet"))
-write_parquet(full_pred_df[, cols_to_save], full_pred_file)
-cat("Saved full-range predictions to:", full_pred_file, "\n")
+saved_df <- pred_df[, cols_to_save]
 
-# ---- Save Re-Validation Predictions (Subset & Save) ----
-dir.create(reval_dir, recursive = TRUE, showWarnings = FALSE)
-reval_df <- full_pred_df[full_pred_df$month_id >= val_start_mid & full_pred_df$month_id <= val_end_mid, ]
-reval_file <- file.path(reval_dir, paste0(folder_name, "_re_validation.parquet"))
-write_parquet(reval_df[, cols_to_save], reval_file)
-cat("Saved re-validation predictions to:", reval_file, "\n")
+dir.create(forecast_dir, recursive = TRUE, showWarnings = FALSE)
+full_pred_file <- file.path(forecast_dir, paste0(folder_name,"_",(shift+546), ".parquet"))
+write_parquet(pred_df[, cols_to_save], full_pred_file)
+cat("Saved  predictions to:", full_pred_file, "\n")
+

@@ -25,19 +25,44 @@ builddv_growseasdummy <- function(s, df) {
   out <- merge(out, dv_df, by = c("priogrid_gid", "month_id"), all.x = TRUE)
   
   # 2) Align growseasdummy to the forecast month, if the column exists
+  # if ("growseasdummy" %in% names(out)) {
+  #   grow_lookup <- out[, c("priogrid_gid", "month_id", "growseasdummy")]
+  #   colnames(grow_lookup)[3] <- "pred_growseasdummy"
+  
+  #   # Join on (priogrid_gid, pred_month_id) -> (priogrid_gid, month_id) to fetch the forecast month's value
+  #   out <- merge(
+  #     out,
+  #     grow_lookup,
+  #     by.x = c("priogrid_gid", "pred_month_id"),
+  #     by.y = c("priogrid_gid", "month_id"),
+  #     all.x = TRUE,
+  #     sort = FALSE
+  #   )
+  # }
   if ("growseasdummy" %in% names(out)) {
-    grow_lookup <- out[, c("priogrid_gid", "month_id", "growseasdummy")]
-    colnames(grow_lookup)[3] <- "pred_growseasdummy"
+    # Month index 1=Jan, ..., 12=Dec
+    out$month_index <- ((out$month_id - 1) %% 12) + 1
+    out$Year        <- 1980 + (out$month_id - 1) %/% 12
+    template_2024 <- out[out$Year == 2022, c("priogrid_gid", "month_id", "month_index", "growseasdummy")]
     
-    # Join on (priogrid_gid, pred_month_id) -> (priogrid_gid, month_id) to fetch the forecast month's value
-    out <- merge(
-      out,
-      grow_lookup,
-      by.x = c("priogrid_gid", "pred_month_id"),
-      by.y = c("priogrid_gid", "month_id"),
-      all.x = TRUE,
-      sort = FALSE
-    )
+    
+    outdir <- file.path( "csv")
+    dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+    
+    # Save template
+    write.csv(template_2024,
+              file = file.path(outdir, "2024_growseasdummy_template.csv"),
+              row.names = FALSE)
+    
+    
+    # Rename for clarity
+    template_2024 <- template_2024[, c("priogrid_gid", "month_index", "growseasdummy")]
+    colnames(template_2024)[3] <- "growseasdummy_2024"
+    
+    # Merge back to all data: repeat 2024 pattern cyclically
+    out <- merge(out, template_2024,
+                 by = c("priogrid_gid", "month_index"),
+                 all.x = TRUE)
   }
   
   return(out)
@@ -96,17 +121,17 @@ buildpred <- function(cuts, df) {
 }
 
 
-    loadpgm <- function() {
-      
-      # link to ff dropbox https://www.dropbox.com/scl/fo/rkj4ttawoz9pv6x35r9cq/ABODDO2BpL1U47oytDq9VzM/pgm_level_data?rlkey=44eg0kk4w8yh8tm1f53vvpzps&subfolder_nav_tracking=1&dl=0
-      
-      d <- read_parquet("data/pgm/pgm_data_121_542.parquet")
-      
-      countries <- read.csv("data/pgm/countries.csv")
-      pgmtocountry <- read.csv("data/pgm/priogrid_gid_to_country_id.csv")
-      month_ids <- read.csv("data/pgm/month_ids.csv")
-      
-      d <- merge(d, pgmtocountry[,c("priogrid_gid", "month_id", "country_id")], by= c("priogrid_gid", "month_id"), all.x=TRUE)
-      d <- merge(d, countries, by.x="country_id", by.y="id", all.x=TRUE)
-      d <- merge(d, month_ids[,2:4], by="month_id", all.x=TRUE)
-    }
+loadpgm <- function() {
+  
+  # link to ff dropbox https://www.dropbox.com/scl/fo/rkj4ttawoz9pv6x35r9cq/ABODDO2BpL1U47oytDq9VzM/pgm_level_data?rlkey=44eg0kk4w8yh8tm1f53vvpzps&subfolder_nav_tracking=1&dl=0
+  
+  d <- read_parquet("data/pgm/pgm_data_121_542.parquet")
+  
+  countries <- read.csv("data/pgm/countries.csv")
+  pgmtocountry <- read.csv("data/pgm/priogrid_gid_to_country_id.csv")
+  month_ids <- read.csv("data/pgm/month_ids.csv")
+  
+  d <- merge(d, pgmtocountry[,c("priogrid_gid", "month_id", "country_id")], by= c("priogrid_gid", "month_id"), all.x=TRUE)
+  d <- merge(d, countries, by.x="country_id", by.y="id", all.x=TRUE)
+  d <- merge(d, month_ids[,2:4], by="month_id", all.x=TRUE)
+}

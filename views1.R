@@ -19,7 +19,7 @@
 rm(list=ls())
 
 
-id_message <- "tlags"
+id_message <- "tlags_basline_dr_mod"
 
 # for reading data
 library(arrow)
@@ -50,13 +50,16 @@ dir.create(ice_dir, recursive = TRUE, showWarnings = FALSE)
 # Safer cluster name
 cluster_name <- paste0("grid_", Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1"))
 
+
+#h2o.init(max_mem_size = "24G")
+
 # Start H2O with safe ports and log location
 h2o.init(
   ip = "127.0.0.1",
   port = port,
   name = cluster_name,
   ice_root = ice_dir,
-  max_mem_size = "48G"  # Stay under --mem=32G
+  max_mem_size = "30G"  # Stay under --mem=32G
 )
 # for boxcox transformations
 library(DescTools)
@@ -115,7 +118,7 @@ source("views_utils.R")
 myvars <- "sb"
 
 # set to one of -1, -.5, 0, .5, 1
-# lambda <- 1
+#lambda <- 1
 # #tweesdie_power
 # tweedie_power <- 1.75
 # # how many months out? takes on value of 1-12sa
@@ -129,7 +132,7 @@ h2oruntime <- 9000
 
 
 
-#lambda <- as.numeric(Sys.getenv("LAMBDA", unset = 1))
+lambda <- as.numeric(Sys.getenv("LAMBDA", unset = 1))
 
 raw_lambda <- Sys.getenv("LAMBDA")
 if (nchar(raw_lambda) == 0) {
@@ -167,13 +170,15 @@ if (myvars == "sb") {
   
   # 17 climate and food variables
   keep_extra <- c(
-    "count_moder_drought_prev10", "cropprop", "growseasdummy","pred_growseasdummy",
+    "count_moder_drought_prev10", "cropprop", "growseasdummy","growseasdummy_2024",
     "spei1_gs_prev10", "spei1_gs_prev10_anom", "spei1_gsm_cv_anom",
     "spei1_gsm_detrend", "spei1gsy_lowermedian_count", "spei_48_detrend",
     "tlag1_dr_mod_gs", "tlag1_dr_moder_gs", "tlag1_dr_sev_gs",
     "tlag1_spei1_gsm", "tlag_12_crop_sum", "tlag_12_harvarea_maincrops",
     "tlag_12_irr_maincrops", "tlag_12_rainf_maincrops"
   )
+
+  #keep_extra <-c("pgd_nlights_calib_mean","tlag1_dr_mod_gs","growseasdummy")
   
   # id and calendar metadata
   keep_meta <- c(
@@ -200,11 +205,11 @@ if (myvars == "sb") {
   df <- mydata[, keeps]
 }
 
+df <- builddv(s=shift, df=df)
+#df <- builddv_growseasdummy(s=shift, df=df)
 
 df <- df[df$month_id <=end_mid & df$month_id >= start_mid,] #df cutt-off section
 
-#df <- builddv(s=shift, df=df)
-df <- builddv_growseasdummy(s=shift, df=df)
 print("---total predictor month range---")
 range(df$month_id)
 
@@ -229,6 +234,20 @@ forecastmonth <- maxmonth + shift # + 2 # includes the +2 from views to account 
 forecastdata$pred_month_id <- forecastmonth
 
 
+# forecastdata$pred_month_index <- ((forecastdata$pred_month_id - 1) %% 12) + 1
+# template_2024 <- read.csv(file.path("csv", "2024_growseasdummy_template.csv"))
+# template_2024 <- template_2024[, c("priogrid_gid", "month_index", "growseasdummy")]
+# colnames(template_2024)[3] <- "growseasdummy_2024"
+# 
+# # Merge so each forecast row gets the right cyclic value
+# forecastdata <- merge(
+#   forecastdata,
+#   template_2024,
+#   by.x = c("priogrid_gid", "pred_month_index"),
+#   by.y = c("priogrid_gid", "month_index"),
+#   all.x = TRUE
+# )
+# 
 
 
 
@@ -239,6 +258,8 @@ print(range(forecastdata$pred_month_id))
 
 cat("\nFirst few rows of forecastdata:\n")
 print(head(forecastdata[, c("priogrid_gid", "month_id", "ged_sb", "pred_ged_sb", "pred_month_id")]))
+print(head(forecastdata))
+
 
 mid_to_ym <- function(mid) format(from_month_id(mid), "%Y%m")
 fcst_ym   <- mid_to_ym(forecastmonth)          # e.g. "202501"
@@ -270,9 +291,6 @@ run_label <- paste(h_label, fcst_ym, task_id, id_message, hp_tag, sep = "_")
 
 # omit NA because shift will create NAs
 df <- na.omit(df)
-
-
-
 
 # drop if the DV has negative values (it shouldn't)
 df <- df[which(df$pred_ged_sb>=0),]
@@ -308,7 +326,7 @@ if(myvars=="sb") {
   #predictors <- colnames(df)[grepl("^ged_sb$|_tlag_|mov_sum_", colnames(df))]
   #rate_features <- c("rate_ged_sb_12_9", "rate_ged_sb_9_6", "rate_ged_sb_6_3", "rate_ged_sb_3_0")
   #predictors <- c(predictors, rate_features)
-  #predictors <- union(predictors, intersect(keep_extra[c(4,11,14,18)], names(df)))
+  predictors <- union(predictors, intersect(keep_extra[c(11)], names(df)))
   predictors <- predictors[which(predictors != "pred_ged_sb")] # mode readable line for same task  predictors <- setdiff(predictors, "pred_ged_sb")
 }
 
@@ -367,7 +385,7 @@ leader <- aml@leader
 
 
 # Save the full leaderboard for this run, grouped by hp_tag folder
-leaderboard_dir <- file.path(scratch_root, "results", "leaderboards", hp_tag)
+leaderboard_dir <- file.path(scratch_root, "new_results", "leaderboards", hp_tag)
 dir.create(leaderboard_dir, recursive = TRUE, showWarnings = FALSE)
 
 lb <- as.data.frame(aml@leaderboard)
@@ -378,6 +396,7 @@ arrow::write_parquet(
   file.path(leaderboard_dir, paste0(run_label, "_leaderboard.parquet"))
 )
 
+validdf <- as.h2o(df[df$month_id %in% c(498, 510), ])
 
 perf_val <- h2o.performance(leader, newdata = validdf)
 
@@ -392,7 +411,7 @@ val_row <- data.frame(
 )
 
 
-val_dir  <- file.path(scratch_root, "results", "validation_metrics", hp_tag)
+val_dir  <- file.path(scratch_root, "new_results", "validation_metrics", hp_tag)
 dir.create(val_dir, recursive = TRUE, showWarnings = FALSE)
 
 # one CSV per id_message under that folder
@@ -446,7 +465,7 @@ out <- cbind(out, temp)
 # write_parquet(out, fn)
 
 
-predictions_dir <- file.path(scratch_root, "data", "predictions", hp_tag)
+predictions_dir <- file.path(scratch_root, "data", "new_predictions", hp_tag)
 dir.create(predictions_dir, recursive = TRUE, showWarnings = FALSE)
 fn <- file.path(predictions_dir, paste0(run_label, "_", leader@model_id, ".parquet"))
 write_parquet(out, fn)
@@ -462,7 +481,7 @@ out <- cbind(out, temp)
 # fn <- paste("data/forecasts/", leader@model_id, run_label, "_", forecastmonth, ".parquet", sep='')
 # write_parquet(out, fn)
 
-forecasts_dir <- file.path(scratch_root, "data", "forecasts", hp_tag)
+forecasts_dir <- file.path(scratch_root, "data", "new_forecasts", hp_tag)
 dir.create(forecasts_dir, recursive = TRUE, showWarnings = FALSE)
 fn <- file.path(forecasts_dir, paste0(leader@model_id, "_", run_label, "_", forecastmonth, ".parquet"))
 write_parquet(out, fn)
@@ -510,7 +529,7 @@ cat("MAE         :", round(mae_val, 4), "\n")
 cat("RMSE        :", round(rmse_val, 4), "\n")
 cat("Forecast Range (min, max): (", round(range_vals[1], 2), ", ", round(range_vals[2], 2), ")\n", sep = "")
 
-results_file <- file.path(scratch_root, "results", "evaluation_results.csv")
+results_file <- file.path(scratch_root, "new_results","test",paste0(id_message, "_evaluation_results.csv"))
 dir.create(dirname(results_file), recursive = TRUE, showWarnings = FALSE)
 
 results_row <- data.frame(
