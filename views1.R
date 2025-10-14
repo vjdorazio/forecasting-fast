@@ -34,14 +34,8 @@ library(h2o)
 
 
 
-#------- w and b imports 
 
-# library(reticulate)
-# use_condaenv("r_clean", required = TRUE)  # use your actual env name
-# wandb <- import("wandb")
 
-# api_key <- Sys.getenv("WANDB_API_KEY")
-# wandb$login(key = api_key)
 
 port <- as.numeric(Sys.getenv("H2O_REST_PORT", unset = "54321"))
 ice_dir <- Sys.getenv("ICE_ROOT", unset = tempfile("h2o_tmp_"))
@@ -548,14 +542,7 @@ write.table(results_row, file = results_file, append = TRUE, sep = ",",
             col.names = !file.exists(results_file), row.names = FALSE)
             
 
-# w and b logging 
-# wandb$log(dict(
-#   mae = round(mae_val, 4),
-#   rmse = round(rmse_val, 4),
-#   forecast_min = round(range_vals[1], 2),
-#   forecast_max = round(range_vals[2], 2)
-# ))
-# wandb$finish()
+
 
 # Job summary print
 cat("\n  job summary:",

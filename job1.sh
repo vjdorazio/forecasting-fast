@@ -40,8 +40,6 @@ TASK_ID=$((SLURM_ARRAY_TASK_ID - 1))
 FORECAST_IDX=$(( (TASK_ID / TOTAL_HYPERPARAMS) + 1 ))  
 HYPERPARAM_IDX=$(( TASK_ID % TOTAL_HYPERPARAMS )) # 0-based index for array access
 
-##export WANDB_MODE=offline
-##export WANDB_API_KEY=d7d4442d07cdb571d866c54ed0a9a8861bcfae78
 
 # Forecast date input (1 per array task)
 FORECAST_DATE=$(sed -n ${FORECAST_IDX}p forecast_dates.txt)
